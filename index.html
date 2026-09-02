@@ -262,6 +262,7 @@
       <div class="account">
         <span class="who" id="whoLabel"></span>
         <span class="avatar" id="whoAvatar"></span>
+        <button class="logout-btn" id="profileBtn">Meu perfil</button>
         <button class="logout-btn" id="logoutBtn">Sair</button>
       </div>
     </div>
@@ -329,6 +330,7 @@ const FASE_LABELS = {
   13:"QA e homologação", 14:"Treinamento e go-live", 15:"Go-live e hypercare"
 };
 const AVATAR_PALETTE = ["#7C5CD6","#3E6DF0","#2F8F5B","#D17A2B","#D6478C","#1F9E9E","#C2711F","#5B6478","#A2432B","#3F6B54"];
+const SETORES = ["Sponsor / Direção","Responsável CRM / Projeto","Comercial","Operação Armazena Mais","Marketing / Tráfego","TI / Fornecedores"];
 
 function escapeHtml(str){ return String(str==null?"":str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -435,6 +437,43 @@ function showApp(){
 }
 
 document.getElementById('logoutBtn').addEventListener('click', logout);
+document.getElementById('profileBtn').addEventListener('click', openProfileModal);
+
+/* ================= PROFILE ================= */
+function openProfileModal(){
+  const setorOptions = `<option value="">Não definido</option>` +
+    SETORES.map(s => `<option value="${escapeHtml(s)}" ${s===currentUser.setor?'selected':''}>${escapeHtml(s)}</option>`).join('');
+  openModal({
+    title: 'Meu perfil', subtitle: 'Dados da sua conta Google e preferências.',
+    bodyHtml: `
+      <form id="profileForm" novalidate>
+        <div class="modal-note" style="display:flex;align-items:center;gap:12px;">
+          <span class="avatar" style="width:44px;height:44px;flex:0 0 44px;${currentUser.foto_url?'':'background:'+colorForEmail(currentUser.email)+';'}display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-weight:700;overflow:hidden;">
+            ${currentUser.foto_url ? `<img src="${escapeHtml(currentUser.foto_url)}" style="width:100%;height:100%;object-fit:cover;">` : initialsFor(currentUser.nome)}
+          </span>
+          <div><b>${escapeHtml(currentUser.nome)}</b><br><span style="color:var(--ink-faint);font-size:11.5px;">${escapeHtml(currentUser.email)}</span></div>
+        </div>
+        <div class="field"><label>Setor / área</label><select id="pf-setor">${setorOptions}</select></div>
+        <div class="field" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="pf-notif" style="width:auto;" ${currentUser.notif_email !== false ? 'checked' : ''}>
+          <label style="margin:0;" for="pf-notif">Receber resumo diário de prazos por e-mail</label>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-neutral" id="pf-cancel">Cancelar</button><button type="submit" class="btn btn-primary">Salvar</button></div>
+      </form>`,
+    onMount: (wrap) => {
+      wrap.querySelector('#pf-cancel').addEventListener('click', closeModal);
+      wrap.querySelector('#profileForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const setor = wrap.querySelector('#pf-setor').value;
+        const notifEmail = wrap.querySelector('#pf-notif').checked;
+        const data = await apiCall('POST', 'atualizarPerfil', { setor, notifEmail });
+        if(!data) return;
+        currentUser.setor = setor; currentUser.notif_email = notifEmail;
+        closeModal(); toast('Perfil atualizado.', 'success');
+      });
+    }
+  });
+}
 
 /* ================= DATA LOADING ================= */
 async function loadEverything(){

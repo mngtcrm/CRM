@@ -239,6 +239,18 @@
   .notif-header-actions button{ font-size:12px; color:var(--accent-dark); background:none; border:none; cursor:pointer; font-weight:600; }
   .notif-header-actions button:hover{ text-decoration:underline; }
 
+  .anexos-list{ display:flex; flex-direction:column; gap:7px; margin-bottom:14px; }
+  .anexo-item{ display:flex; align-items:center; gap:10px; padding:9px 11px; background:var(--bg); border-radius:var(--radius-sm); }
+  .anexo-item .icon{ width:28px; height:28px; border-radius:8px; background:var(--accent-soft); color:var(--accent-dark); flex:0 0 28px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+  .anexo-item .info{ flex:1; min-width:0; }
+  .anexo-item .info a{ font-size:12.6px; font-weight:600; color:var(--ink); text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block; }
+  .anexo-item .info a:hover{ color:var(--accent-dark); text-decoration:underline; }
+  .anexo-item .info .meta{ font-size:11px; color:var(--ink-faint); }
+  .anexo-item .remove{ background:none; border:none; color:var(--rust); font-size:11.5px; font-weight:600; cursor:pointer; flex:0 0 auto; }
+  .anexo-item .remove:hover{ text-decoration:underline; }
+  .anexo-upload-row{ display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+  #anexoUploadStatus{ font-size:11.5px; color:var(--ink-faint); }
+
   @media (max-width:1180px){ .right-panel{ display:none; } }
   @media (max-width:960px){ .sidebar{ display:none; } .board{ grid-template-columns:1fr; } }
   @media (max-width:560px){ .modal-box{ max-width:100%; } .field-row{ flex-direction:column; gap:0; } .detail-meta{ grid-template-columns:1fr; } }
@@ -838,6 +850,13 @@ async function openDetailModal(taskId){
       </div>
       ${t.descricao ? `<div class="detail-section-title">Descrição</div><div class="detail-desc">${escapeHtml(t.descricao)}</div>` : ''}
       ${t.link_entregavel ? `<div class="detail-section-title">Link do entregável</div><div class="detail-desc"><a href="${escapeHtml(t.link_entregavel)}" target="_blank" rel="noopener">${escapeHtml(t.link_entregavel)}</a></div>` : ''}
+      <div class="detail-section-title">Anexos</div>
+      <div class="anexos-list" id="anexosList"><div class="empty-hint">Carregando...</div></div>
+      <div class="anexo-upload-row">
+        <input type="file" id="anexoFileInput" class="hidden">
+        <button type="button" class="btn btn-neutral" id="anexoUploadBtn">Anexar arquivo</button>
+        <span id="anexoUploadStatus"></span>
+      </div>
       <div class="detail-section-title">Histórico</div>
       <div class="notes-thread" id="notesThread"><div class="empty-hint">Carregando...</div></div>
       <div class="add-note-row">
@@ -863,6 +882,7 @@ async function openDetailModal(taskId){
       const doneBtn = wrap.querySelector('#d-done');
       if(doneBtn) doneBtn.addEventListener('click', () => { closeModal(); openCompleteModal(taskId); });
       wrap.querySelector('#d-del').addEventListener('click', () => { closeModal(); openDeleteModal(taskId); });
+      wireAnexoUpload(wrap, t.id);
       wrap.querySelector('#addNoteBtn').addEventListener('click', async () => {
         const ta = wrap.querySelector('#quickNote'); const texto = ta.value.trim();
         if(!texto){ ta.focus(); return; }
@@ -878,9 +898,77 @@ async function openDetailModal(taskId){
   const notasResp = await apiCall('GET', 'notas', { tarefaId: t.id });
   const threadEl = wrap.querySelector('#notesThread');
   if(threadEl) threadEl.innerHTML = renderNotesThread(notasResp || []);
+  await loadAnexosInto(wrap, t.id);
 }
 
-/* ================= SIDEBAR / FILTERS ================= */
+/* ================= ANEXOS ================= */
+const MAX_ANEXO_BYTES = 8 * 1024 * 1024; // 8MB — limite prático pra não travar o upload
+
+function fileIconLabel(nome){
+  const ext = (nome.split('.').pop() || '').slice(0,4).toUpperCase();
+  return ext || '?';
+}
+function renderAnexosList(anexos, taskId){
+  if(!anexos.length) return `<div class="empty-hint">Nenhum anexo ainda.</div>`;
+  return anexos.map(a => `
+    <div class="anexo-item" data-anexo-id="${a.id}">
+      <span class="icon">${escapeHtml(fileIconLabel(a.nome_arquivo))}</span>
+      <div class="info">
+        <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">${escapeHtml(a.nome_arquivo)}</a>
+        <div class="meta">${escapeHtml(nomeForEmail(a.enviado_por))} · ${escapeHtml(String(a.criado_em).slice(0,10).split('-').reverse().join('/'))}</div>
+      </div>
+      <button type="button" class="remove" data-remove-anexo="${a.id}" data-task="${taskId}">Remover</button>
+    </div>`).join('');
+}
+async function loadAnexosInto(wrap, taskId){
+  const anexos = await apiCall('GET', 'anexos', { tarefaId: taskId });
+  const el = wrap.querySelector('#anexosList');
+  if(!el) return;
+  el.innerHTML = renderAnexosList(anexos || [], taskId);
+  el.querySelectorAll('[data-remove-anexo]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const data = await apiCall('POST', 'excluirAnexo', { id: btn.dataset.removeAnexo });
+      if(!data) return;
+      toast('Anexo removido.', 'success');
+      await loadAnexosInto(wrap, taskId);
+    });
+  });
+}
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function wireAnexoUpload(wrap, taskId){
+  const input = wrap.querySelector('#anexoFileInput');
+  const btn = wrap.querySelector('#anexoUploadBtn');
+  const status = wrap.querySelector('#anexoUploadStatus');
+  btn.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if(!file) return;
+    if(file.size > MAX_ANEXO_BYTES){
+      toast('Arquivo maior que 8MB — não é possível anexar.', 'danger');
+      input.value = ''; return;
+    }
+    status.textContent = 'Enviando ' + file.name + '...';
+    btn.disabled = true;
+    try{
+      const base64 = await fileToBase64(file);
+      const data = await apiCall('POST', 'uploadAnexo', {
+        tarefaId: taskId, nomeArquivo: file.name, mimeType: file.type || 'application/octet-stream', conteudoBase64: base64
+      });
+      if(data){ toast('Anexo enviado.', 'success'); await loadAnexosInto(wrap, taskId); await loadEverything(); }
+    } finally {
+      status.textContent = ''; btn.disabled = false; input.value = '';
+    }
+  });
+}
+
+
 function populatePhaseList(){
   const wrap = document.getElementById('phaseList');
   let html = `<div class="phase-item ${activeFaseFilter==='all'?'active':''}" data-fase="all"><div class="num">·</div><div class="label">Todas as fases</div></div>`;

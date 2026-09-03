@@ -222,6 +222,23 @@
   .toast.success{ background:var(--sage-dark); }
   .toast.danger{ background:var(--rust-dark); }
 
+  .logout-btn.has-unread{ background:var(--accent-soft); border-color:var(--accent); color:var(--accent-dark); font-weight:700; }
+
+  .notif-list{ display:flex; flex-direction:column; gap:8px; max-height:420px; overflow-y:auto; }
+  .notif-item{ display:flex; gap:10px; padding:11px 12px; border-radius:var(--radius-sm); border:1px solid var(--line); background:var(--panel); cursor:pointer; text-align:left; width:100%; }
+  .notif-item:hover{ background:var(--line-soft); }
+  .notif-item.unread{ background:var(--accent-soft); border-color:#B9CBFA; }
+  .notif-item .bar{ width:3px; border-radius:99px; align-self:stretch; flex:0 0 3px; }
+  .notif-item .bar.vencida{ background:var(--rust); }
+  .notif-item .bar.prazo_proximo{ background:var(--amber); }
+  .notif-item .bar.atribuida{ background:var(--accent); }
+  .notif-item .txt{ font-size:12.6px; color:var(--ink); line-height:1.4; flex:1; }
+  .notif-item.unread .txt{ font-weight:600; }
+  .notif-item .time{ font-size:11px; color:var(--ink-faint); margin-top:3px; }
+  .notif-header-actions{ display:flex; justify-content:flex-end; margin-bottom:10px; }
+  .notif-header-actions button{ font-size:12px; color:var(--accent-dark); background:none; border:none; cursor:pointer; font-weight:600; }
+  .notif-header-actions button:hover{ text-decoration:underline; }
+
   @media (max-width:1180px){ .right-panel{ display:none; } }
   @media (max-width:960px){ .sidebar{ display:none; } .board{ grid-template-columns:1fr; } }
   @media (max-width:560px){ .modal-box{ max-width:100%; } .field-row{ flex-direction:column; gap:0; } .detail-meta{ grid-template-columns:1fr; } }
@@ -262,6 +279,7 @@
       <div class="account">
         <span class="who" id="whoLabel"></span>
         <span class="avatar" id="whoAvatar"></span>
+        <button class="logout-btn" id="notifBtn">Notificações</button>
         <button class="logout-btn" id="profileBtn">Meu perfil</button>
         <button class="logout-btn" id="logoutBtn">Sair</button>
       </div>
@@ -355,6 +373,7 @@ let currentUser = null;
 let usuarios = [];
 let tasks = [];
 let activity = [];
+let notifCount = 0;
 let activeRespFilter = "all";
 let activeFaseFilter = "all";
 let searchTerm = "";
@@ -433,11 +452,67 @@ function showApp(){
   const av = document.getElementById('whoAvatar');
   if(currentUser.foto_url){ av.innerHTML = `<img src="${escapeHtml(currentUser.foto_url)}" alt="">`; }
   else { av.textContent = initialsFor(currentUser.nome); av.style.background = colorForEmail(currentUser.email); }
+  updateNotifButton();
   render();
 }
 
 document.getElementById('logoutBtn').addEventListener('click', logout);
 document.getElementById('profileBtn').addEventListener('click', openProfileModal);
+document.getElementById('notifBtn').addEventListener('click', openNotifModal);
+
+/* ================= NOTIFICATIONS ================= */
+function notifTypeLabel(tipo){
+  if(tipo === 'vencida') return 'Prazo vencido';
+  if(tipo === 'prazo_proximo') return 'Prazo próximo';
+  if(tipo === 'atribuida') return 'Nova atribuição';
+  return 'Notificação';
+}
+function renderNotifList(list){
+  if(!list.length) return `<div class="empty-hint">Nenhuma notificação por aqui.</div>`;
+  return list.map(n => `
+    <button class="notif-item ${n.lida !== true ? 'unread' : ''}" data-id="${n.id}" data-tarefa="${n.tarefa_id||''}">
+      <span class="bar ${n.tipo}"></span>
+      <div>
+        <div class="txt">${escapeHtml(n.texto)}</div>
+        <div class="time">${notifTypeLabel(n.tipo)} · ${escapeHtml(String(n.criado_em).slice(0,16).replace('T',' '))}</div>
+      </div>
+    </button>`).join('');
+}
+async function openNotifModal(){
+  const wrap = openModal({
+    title: 'Notificações',
+    bodyHtml: `
+      <div class="notif-header-actions"><button type="button" id="marcarTodasBtn">Marcar todas como lidas</button></div>
+      <div class="notif-list" id="notifList"><div class="empty-hint">Carregando...</div></div>`,
+    onMount: (wrap) => {
+      wrap.querySelector('#marcarTodasBtn').addEventListener('click', async () => {
+        const data = await apiCall('POST', 'marcarTodasLidas', {});
+        if(!data) return;
+        toast('Notificações marcadas como lidas.', 'success');
+        await refreshNotifModal(wrap);
+        await loadEverything(); updateNotifButton();
+      });
+    }
+  });
+  await refreshNotifModal(wrap);
+}
+async function refreshNotifModal(wrap){
+  const list = await apiCall('GET', 'notificacoes');
+  const listEl = wrap.querySelector('#notifList');
+  if(!listEl) return;
+  listEl.innerHTML = renderNotifList(list || []);
+  listEl.querySelectorAll('.notif-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      const id = item.dataset.id; const tarefaId = item.dataset.tarefa;
+      if(item.classList.contains('unread')){
+        await apiCall('POST', 'marcarNotificacaoLida', { id });
+        notifCount = Math.max(0, notifCount - 1); updateNotifButton();
+      }
+      if(tarefaId){ closeModal(); openDetailModal(tarefaId); }
+      else { item.classList.remove('unread'); }
+    });
+  });
+}
 
 /* ================= PROFILE ================= */
 function openProfileModal(){
@@ -485,8 +560,14 @@ async function loadEverything(){
   currentUser = boot.usuario;
   tasks = (boot.tarefas || []).map(t => Object.assign({}, t, { fase: Number(t.fase) }));
   activity = boot.atividade || [];
+  notifCount = boot.notificacoesNaoLidas || 0;
   usuarios = usuariosResp || [ { email: currentUser.email, nome: currentUser.nome, foto_url: currentUser.foto_url } ];
   return true;
+}
+function updateNotifButton(){
+  const btn = document.getElementById('notifBtn');
+  btn.textContent = notifCount > 0 ? `Notificações (${notifCount})` : 'Notificações';
+  btn.classList.toggle('has-unread', notifCount > 0);
 }
 
 /* ================= TOASTS ================= */
@@ -955,6 +1036,7 @@ function renderActivity(){
 
 /* ================= MAIN RENDER ================= */
 function render(){
+  updateNotifButton();
   const visible = tasks.filter(passesFilters);
   if(currentView === 'kanban'){ renderKanban(visible); } else { renderList(visible); }
   const total = tasks.length; const done = tasks.filter(t => t.status === 'done').length;

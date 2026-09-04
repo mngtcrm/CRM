@@ -630,7 +630,8 @@ function openRespPicker(anchorEl, taskId){
 }
 
 /* ================= STATE ================= */
-let idToken = localStorage.getItem('plano-crm-idToken') || null;
+let googleIdToken = null; // token do Google — usado só na primeira vez, descartado em seguida
+let sessionToken = localStorage.getItem('plano-crm-sessionToken') || null; // token nosso, duradouro
 let currentUser = null;
 let usuarios = [];
 let tasks = [];
@@ -645,27 +646,37 @@ let draggedId = null;
 /* ================= API ================= */
 let lastErrorWasAuth = false;
 
+function authParams(){
+  return sessionToken ? { sessionToken } : { idToken: googleIdToken || '' };
+}
+function saveSessionToken(t){
+  if(!t || t === sessionToken) return;
+  sessionToken = t;
+  try{ localStorage.setItem('plano-crm-sessionToken', t); }catch(e){}
+}
+
 async function apiCall(method, action, payload){
   try{
     let res;
     if(method === 'GET'){
-      const params = new URLSearchParams(Object.assign({ action, idToken: idToken || '' }, payload || {}));
+      const params = new URLSearchParams(Object.assign({ action }, authParams(), payload || {}));
       res = await fetch(API_URL + '?' + params.toString());
     } else {
       res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(Object.assign({ action, idToken }, payload || {}))
+        body: JSON.stringify(Object.assign({ action }, authParams(), payload || {}))
       });
     }
     const data = await res.json();
     if(data.error){
-      lastErrorWasAuth = /token|bloqueado/i.test(data.error);
+      lastErrorWasAuth = /token|sess[ãa]o|bloqueado/i.test(data.error);
       toast(data.error, 'danger');
       if(lastErrorWasAuth) logout();
       return null;
     }
     lastErrorWasAuth = false;
+    if(data.sessionToken) saveSessionToken(data.sessionToken);
     return data;
   } catch(err){
     lastErrorWasAuth = false; // falha de rede/conexão — não é problema de login, não deve derrubar a sessão
@@ -690,8 +701,13 @@ function initGoogleSignIn(retryCount){
   window.__gsiInitDone = true;
   google.accounts.id.initialize({ client_id: CLIENT_ID, callback: handleCredentialResponse, auto_select: true });
   google.accounts.id.renderButton(document.getElementById('googleSignInDiv'), { theme:'outline', size:'large', text:'signin_with', width:280 });
-  if(idToken){ tryResumeSession(); }
-  else { try{ google.accounts.id.prompt(); }catch(e){} } // tenta reconectar em silêncio se o navegador já tem sessão Google ativa
+  if(sessionToken){
+    /* Já temos uma sessão nossa, duradoura — nem precisa falar com o Google
+       de novo. É rápido e não depende do One Tap (que o Safari costuma bloquear). */
+    tryResumeSession();
+  } else {
+    try{ google.accounts.id.prompt(); }catch(e){} // sem sessão nenhuma ainda — tenta reconectar em silêncio via Google
+  }
 }
 /* Gatilho redundante: se o atributo onload do <script> do Google não disparar
    (bloqueador de anúncio, firewall, rede lenta), esta chamada garante que a
@@ -713,19 +729,18 @@ async function tryResumeSession(attempt){
     return;
   }
 
-  /* Só chega aqui se o problema foi realmente de autenticação, ou depois de
-     algumas tentativas — aí sim tenta renovar em silêncio antes de pedir
-     clique manual de novo. */
-  idToken = null; localStorage.removeItem('plano-crm-idToken');
-  setLoginStatus('Renovando sessão...');
-  try{ google.accounts.id.prompt(); }catch(e){ setLoginStatus(''); }
+  /* A sessão salva realmente não é mais válida (ex: você saiu explicitamente
+     em outro lugar, ou um admin bloqueou seu acesso) — limpa e pede login de novo. */
+  sessionToken = null; localStorage.removeItem('plano-crm-sessionToken');
+  setLoginStatus('');
+  try{ google.accounts.id.prompt(); }catch(e){}
 }
 
 async function handleCredentialResponse(response){
-  idToken = response.credential;
-  localStorage.setItem('plano-crm-idToken', idToken);
+  googleIdToken = response.credential;
   setLoginStatus('Entrando...');
-  const ok = await loadEverything();
+  const ok = await loadEverything(); // essa primeira chamada usa o idToken do Google e já recebe de volta o token de sessão duradouro
+  googleIdToken = null; // descartado — não precisamos dele de novo
   if(ok){ showApp(); } else { setLoginStatus('Não foi possível entrar. Tente novamente.', true); }
 }
 
@@ -736,8 +751,13 @@ function setLoginStatus(msg, isErr){
 }
 
 function logout(){
-  idToken = null;
-  localStorage.removeItem('plano-crm-idToken');
+  const tokenToClose = sessionToken;
+  sessionToken = null; googleIdToken = null;
+  localStorage.removeItem('plano-crm-sessionToken');
+  if(tokenToClose){
+    fetch(API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action:'logout', sessionToken: tokenToClose }) }).catch(()=>{});
+  }
   try{ google.accounts.id.disableAutoSelect(); }catch(e){}
   document.getElementById('app').classList.remove('show');
   document.getElementById('loginScreen').classList.remove('hidden');

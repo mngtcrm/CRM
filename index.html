@@ -511,13 +511,27 @@ async function apiCall(method, action, payload){
 }
 
 /* ================= AUTH ================= */
-function initGoogleSignIn(){
-  if(!window.google || !google.accounts) { setTimeout(initGoogleSignIn, 300); return; }
+function initGoogleSignIn(retryCount){
+  retryCount = retryCount || 0;
+  if(window.__gsiInitDone) return; // evita inicializar duas vezes se os dois gatilhos dispararem
+  if(!window.google || !google.accounts){
+    if(retryCount > 40){ // ~12s de tentativas — desiste e avisa
+      setLoginStatus('Não foi possível carregar o login do Google. Verifique sua internet ou se algum bloqueador está impedindo o acesso a accounts.google.com, e recarregue a página.', true);
+      return;
+    }
+    setTimeout(() => initGoogleSignIn(retryCount + 1), 300);
+    return;
+  }
+  window.__gsiInitDone = true;
   google.accounts.id.initialize({ client_id: CLIENT_ID, callback: handleCredentialResponse, auto_select: true });
   google.accounts.id.renderButton(document.getElementById('googleSignInDiv'), { theme:'outline', size:'large', text:'signin_with', width:280 });
   if(idToken){ tryResumeSession(); }
   else { try{ google.accounts.id.prompt(); }catch(e){} } // tenta reconectar em silêncio se o navegador já tem sessão Google ativa
 }
+/* Gatilho redundante: se o atributo onload do <script> do Google não disparar
+   (bloqueador de anúncio, firewall, rede lenta), esta chamada garante que a
+   gente ainda tenta inicializar o login assim que a página terminar de carregar. */
+window.addEventListener('load', () => setTimeout(() => initGoogleSignIn(), 200));
 
 async function tryResumeSession(attempt){
   attempt = attempt || 1;

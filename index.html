@@ -276,6 +276,29 @@
   .resp-picker{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow-modal); padding:10px; width:220px; z-index:150; }
   .resp-picker .resp-picker-list{ max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
 
+  /* ---------------- detail side panel (slides from the right) ---------------- */
+  .detail-panel-backdrop{
+    position:fixed; inset:0; background:rgba(15,20,35,.35); z-index:98;
+    opacity:0; pointer-events:none; transition:opacity .2s ease;
+  }
+  .detail-panel-backdrop.show{ opacity:1; pointer-events:auto; }
+  .detail-panel{
+    position:fixed; top:0; right:0; height:100dvh; width:480px; max-width:94vw;
+    background:var(--panel); box-shadow:-24px 0 60px rgba(15,20,35,.18); z-index:99;
+    transform:translateX(100%); transition:transform .25s ease;
+    display:flex; flex-direction:column;
+  }
+  .detail-panel.show{ transform:translateX(0); }
+  .detail-panel-header{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+    padding:20px 24px 4px; flex:0 0 auto;
+  }
+  .detail-panel-header h2{ font-size:17px; margin:0; font-weight:700; line-height:1.3; }
+  .detail-panel-close{ background:none; border:none; color:var(--ink-soft); font-size:12.5px; font-weight:600; cursor:pointer; padding:4px 2px; white-space:nowrap; }
+  .detail-panel-close:hover{ color:var(--ink); text-decoration:underline; }
+  .detail-panel-body{ flex:1; overflow-y:auto; padding:14px 24px 28px; }
+  @media (max-width:760px){ .detail-panel{ width:100vw; max-width:100vw; } }
+
   /* ---------------- mobile-only controls (hidden on desktop) ---------------- */
   .menu-btn{ display:none; }
   .sidebar-close-btn{ display:none; }
@@ -489,6 +512,14 @@
 </div>
 
 <div id="modalContainer"></div>
+<div class="detail-panel-backdrop" id="detailPanelBackdrop"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-panel-header">
+    <h2 id="detailPanelTitle"></h2>
+    <button class="detail-panel-close" id="detailPanelClose">Fechar</button>
+  </div>
+  <div class="detail-panel-body" id="detailPanelBody"></div>
+</div>
 <div class="toast-root" id="toastRoot"></div>
 
 <script>
@@ -505,7 +536,7 @@ const FASE_LABELS = {
   13:"QA e homologação", 14:"Treinamento e go-live", 15:"Go-live e hypercare"
 };
 const AVATAR_PALETTE = ["#7C5CD6","#3E6DF0","#2F8F5B","#D17A2B","#D6478C","#1F9E9E","#C2711F","#5B6478","#A2432B","#3F6B54"];
-const SETORES = ["Sponsor / Direção","Responsável CRM / Projeto","Comercial","Operação Armazena Mais","Marketing / Tráfego","TI / Fornecedores"];
+const SETORES = ["Sponsor / Direção","Responsável CRM / Projeto","Gerente Comercial","Operação Armazena Mais","BP de Marketing","TI / Fornecedores"];
 
 function escapeHtml(str){ return String(str==null?"":str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 function todayISO(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
@@ -1162,7 +1193,7 @@ function openEditModal(taskId){
       </form>`,
     onMount: (wrap) => {
       wireRespDropdown('et-responsaveis');
-      wrap.querySelector('#et-cancel').addEventListener('click', () => openDetailModal(taskId));
+      wrap.querySelector('#et-cancel').addEventListener('click', () => { closeModal(); openDetailModal(taskId); });
       wrap.querySelector('#editForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const tituloEl = wrap.querySelector('#et-titulo'); const titulo = tituloEl.value.trim();
@@ -1199,12 +1230,29 @@ function renderNotesThread(notas){
     </div>`).join('');
 }
 
+/* ================= DETAIL SIDE PANEL (desliza da lateral direita) ================= */
+function closePanel(){
+  document.getElementById('detailPanel').classList.remove('show');
+  document.getElementById('detailPanelBackdrop').classList.remove('show');
+  document.removeEventListener('keydown', panelEscHandler);
+}
+function panelEscHandler(e){ if(e.key === 'Escape') closePanel(); }
+function openPanel(title, bodyHtml){
+  const panel = document.getElementById('detailPanel');
+  document.getElementById('detailPanelTitle').textContent = title;
+  document.getElementById('detailPanelBody').innerHTML = bodyHtml;
+  panel.classList.add('show');
+  document.getElementById('detailPanelBackdrop').classList.add('show');
+  document.addEventListener('keydown', panelEscHandler);
+  return panel;
+}
+document.getElementById('detailPanelClose').addEventListener('click', closePanel);
+document.getElementById('detailPanelBackdrop').addEventListener('click', closePanel);
+
 async function openDetailModal(taskId){
   const t = tasks.find(x => x.id === taskId); if(!t) return;
   const overdue = isOverdue(t.prazo, t.status);
-  const wrap = openModal({
-    title: escapeHtml(t.titulo), wide: true,
-    bodyHtml: `
+  const wrap = openPanel(escapeHtml(t.titulo), `
       <div class="tag-row">
         <span class="fase-tag">Fase ${t.fase} · ${escapeHtml(FASE_LABELS[t.fase]||'')}</span>
         <span class="prio-tag prio-${t.prioridade}">${PRIORIDADES[t.prioridade]}</span>
@@ -1238,32 +1286,31 @@ async function openDetailModal(taskId){
         ${t.status !== 'doing' ? `<button type="button" class="btn ${t.status==='todo'?'btn-start':'btn-neutral'}" id="d-start">${t.status==='todo'?'Iniciar':'Reabrir'}</button>` : ''}
         ${t.status !== 'done' ? `<button type="button" class="btn btn-done" id="d-done">Concluir</button>` : ''}
         <button type="button" class="btn btn-del" id="d-del">Excluir</button>
-      </div>`,
-    onMount: (wrap) => {
-      wrap.querySelector('#d-edit').addEventListener('click', () => openEditModal(taskId));
-      const todoBtn = wrap.querySelector('#d-todo');
-      if(todoBtn) todoBtn.addEventListener('click', async () => {
-        const data = await apiCall('POST', 'moverTarefa', { id: t.id, status: 'todo' });
-        if(!data) return; closeModal(); toast('Tarefa movida para A fazer.', 'success'); applyBootData(data); render();
-      });
-      const startBtn = wrap.querySelector('#d-start');
-      if(startBtn) startBtn.addEventListener('click', () => { closeModal(); openStartModal(taskId); });
-      const doneBtn = wrap.querySelector('#d-done');
-      if(doneBtn) doneBtn.addEventListener('click', () => { closeModal(); openCompleteModal(taskId); });
-      wrap.querySelector('#d-del').addEventListener('click', () => { closeModal(); openDeleteModal(taskId); });
-      wireAnexoUpload(wrap, t.id);
-      wrap.querySelector('#addNoteBtn').addEventListener('click', async () => {
-        const ta = wrap.querySelector('#quickNote'); const texto = ta.value.trim();
-        if(!texto){ ta.focus(); return; }
-        const data = await apiCall('POST', 'adicionarNota', { tarefaId: t.id, texto, tipo: 'nota' });
-        if(!data) return;
-        ta.value = '';
-        const notasResp = await apiCall('GET', 'notas', { tarefaId: t.id });
-        wrap.querySelector('#notesThread').innerHTML = renderNotesThread(notasResp || []);
-        applyBootData(data); updateNotifButton();
-      });
-    }
+      </div>`);
+
+  wrap.querySelector('#d-edit').addEventListener('click', () => openEditModal(taskId));
+  const todoBtn = wrap.querySelector('#d-todo');
+  if(todoBtn) todoBtn.addEventListener('click', async () => {
+    const data = await apiCall('POST', 'moverTarefa', { id: t.id, status: 'todo' });
+    if(!data) return; closePanel(); toast('Tarefa movida para A fazer.', 'success'); applyBootData(data); render();
   });
+  const startBtn = wrap.querySelector('#d-start');
+  if(startBtn) startBtn.addEventListener('click', () => { closePanel(); openStartModal(taskId); });
+  const doneBtn = wrap.querySelector('#d-done');
+  if(doneBtn) doneBtn.addEventListener('click', () => { closePanel(); openCompleteModal(taskId); });
+  wrap.querySelector('#d-del').addEventListener('click', () => { closePanel(); openDeleteModal(taskId); });
+  wireAnexoUpload(wrap, t.id);
+  wrap.querySelector('#addNoteBtn').addEventListener('click', async () => {
+    const ta = wrap.querySelector('#quickNote'); const texto = ta.value.trim();
+    if(!texto){ ta.focus(); return; }
+    const data = await apiCall('POST', 'adicionarNota', { tarefaId: t.id, texto, tipo: 'nota' });
+    if(!data) return;
+    ta.value = '';
+    const notasResp = await apiCall('GET', 'notas', { tarefaId: t.id });
+    wrap.querySelector('#notesThread').innerHTML = renderNotesThread(notasResp || []);
+    applyBootData(data); updateNotifButton();
+  });
+
   const notasResp = await apiCall('GET', 'notas', { tarefaId: t.id });
   const threadEl = wrap.querySelector('#notesThread');
   if(threadEl) threadEl.innerHTML = renderNotesThread(notasResp || []);
